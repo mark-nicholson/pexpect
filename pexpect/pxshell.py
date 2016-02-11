@@ -20,20 +20,66 @@ PEXPECT LICENSE
 
 '''
 
-from pexpect import ExceptionPexpect, TIMEOUT, EOF
-from pexpect.pxshell import pxshell
-
+from pexpect import ExceptionPexpect, TIMEOUT, EOF, spawn
 import time
 import os
 
-__all__ = ['ExceptionPxssh', 'pxssh']
+__all__ = [
+    'ExceptionPxShell',
+    'pxshell', 'pxinterpreter', 'pxsh', 'pxcsh',
+    'UNIQUE_TAG'
+]
 
+# global prompt uniqueness
+UNIQUE_TAG = '[PEXPECT]'
+
+class pxinterpreter(object):
+
+    def __init__(self):
+        self.tag = UNIQUE_TAG
+        self.prompt_fmt = '%s\$ '
+
+    def terminal_type(self):
+        raise NotImplementedError()
+
+    def default_prompt(self):
+        raise NotImplementedError()
+
+    def unique_prompt(self):
+        raise NotImplementedError()
+
+    def set_prompt_cmd(self):
+        raise NotImplementedError()
+
+class pxsh(pxinterpreter):
+
+    def terminal_type(self):
+        return 'ansi'
+
+    def default_prompt(self):
+        return r"[#$]"
+
+    def unique_prompt(self):
+        return self.prompt_fmt % self.tag
+
+    def set_prompt_cmd(self):
+        if tag is not None:
+            self.tag = tag
+        return "PS1='%s'" % self.unique_prompt()
+
+class pxcsh(pxsh):
+
+    def set_prompt_cmd(self):
+        return "set prompt='%s'" % self.unique_prompt()
+
+    
+    
 # Exception classes used by this module.
-class ExceptionPxssh(ExceptionPexpect):
-    '''Raised for pxssh exceptions.
+class ExceptionPxShell(ExceptionPexpect):
+    '''Raised for pxshell exceptions.
     '''
 
-class pxssh (pxshell):
+class pxshell (spawn):
     '''This class extends pexpect.spawn to specialize setting up SSH
     connections. This adds methods for login, logout, and expecting the shell
     prompt. It does various tricky things to handle many situations in the SSH
@@ -90,11 +136,9 @@ class pxssh (pxshell):
     def __init__ (self, timeout=30, maxread=2000, searchwindowsize=None,
                     logfile=None, cwd=None, env=None, interpreter=None):
 
-        pxshell.__init__(self, None, timeout=timeout, maxread=maxread, searchwindowsize=searchwindowsize, logfile=logfile, cwd=cwd, env=env, interpreter=interpreter)
+        spawn.__init__(self, None, timeout=timeout, maxread=maxread, searchwindowsize=searchwindowsize, logfile=logfile, cwd=cwd, env=env)
 
-        self.name = '<pxssh>'
-
-        self.interpreter = interpreter
+        self.name = '<pxshell>'
 
         #SUBTLE HACK ALERT! Note that the command that SETS the prompt uses a
         #slightly different string than the regular expression to match it. This
@@ -105,24 +149,9 @@ class pxssh (pxshell):
         #need to be escaped, but it doesn't hurt and serves to make the set
         #prompt command different than the regex.
 
-        # used to match the command-line prompt
-        self.UNIQUE_PROMPT = "\[PEXPECT\][\$\#] "
-        self.PROMPT = self.UNIQUE_PROMPT
-
-        # used to set shell command-line prompt to UNIQUE_PROMPT.
-        self.PROMPT_SET_SH = "PS1='[PEXPECT]\$ '"
-        self.PROMPT_SET_CSH = "set prompt='[PEXPECT]\$ '"
-        self.SSH_OPTS = ("-o'RSAAuthentication=no'"
-                + " -o 'PubkeyAuthentication=no'")
-# Disabling host key checking, makes you vulnerable to MITM attacks.
-#                + " -o 'StrictHostKeyChecking=no'"
-#                + " -o 'UserKnownHostsFile /dev/null' ")
-        # Disabling X11 forwarding gets rid of the annoying SSH_ASKPASS from
-        # displaying a GUI password dialog. I have not figured out how to
-        # disable only SSH_ASKPASS without also disabling X11 forwarding.
-        # Unsetting SSH_ASKPASS on the remote side doesn't disable it! Annoying!
-        #self.SSH_OPTS = "-x -o'RSAAuthentication=no' -o 'PubkeyAuthentication=no'"
-        self.force_password = False
+        # prepare a basic interpreter
+        self.interpreter = interpreter
+        print("interpreter: " + str(self.interpreter))
 
     def levenshtein_distance(self, a, b):
         '''This calculates the Levenshtein distance between a and b.
@@ -183,7 +212,17 @@ class pxssh (pxshell):
         can take 12 seconds. Low latency connections are more likely to fail
         with a low sync_multiplier. Best case sync time gets worse with a
         high sync multiplier (500 ms with default). '''
+        print("pxshell::sync_original_prompt()")
 
+        # mop up the cruft so far
+        #spew = 'crap'
+        #while len(spew) > 0:
+        #    try:
+        #        spew = self.read_nonblocking(64, timeout=0)
+        #        print("spew: '%s'" % spew)
+        #    except TIMEOUT:
+        #        break
+        
         # All of these timing pace values are magic.
         # I came up with these based on what seemed reliable for
         # connecting to a heavily loaded machine I have.
@@ -213,12 +252,12 @@ class pxssh (pxshell):
             return True
         return False
 
-    ### TODO: This is getting messy and I'm pretty sure this isn't perfect.
-    ### TODO: I need to draw a flow chart for this.
-    def login (self, server, username, password='', terminal_type='ansi',
-                original_prompt=r"[#$]", login_timeout=10, port=None,
-                auto_prompt_reset=True, ssh_key=None, quiet=True,
-                sync_multiplier=1, check_local_ip=True):
+    def login (self,
+               executable, options='',
+               username='', password='',
+               login_timeout=1,
+               auto_prompt_reset=True,
+               sync_multiplier=1):
         '''This logs the user into the given server.
 
         It uses
@@ -244,90 +283,52 @@ class pxssh (pxshell):
         not reset then this will disable the :meth:`prompt` method unless you
         manually set the :attr:`PROMPT` attribute.
         '''
+        print("pxshell::login()")
+        # archive the options
+        self.login_timeout = login_timeout
+        self.sync_multiplier = sync_multiplier        
 
-        ssh_options = ''
-        if quiet:
-            ssh_options = ssh_options + ' -q'
-        if not check_local_ip:
-            ssh_options = ssh_options + " -o'NoHostAuthenticationForLocalhost=yes'"
-        if self.force_password:
-            ssh_options = ssh_options + ' ' + self.SSH_OPTS
-        if port is not None:
-            ssh_options = ssh_options + ' -p %s'%(str(port))
-        if ssh_key is not None:
-            try:
-                os.path.isfile(ssh_key)
-            except:
-                raise ExceptionPxssh('private ssh key does not exist')
-            ssh_options = ssh_options + ' -i %s' % (ssh_key)
-        cmd = "ssh %s -l %s %s" % (ssh_options, username, server)
+        # double check
+        if executable == '':
+            raise ExceptionPxShell('Unconfigured child application: %s' % executable)
 
-        # This does not distinguish between a remote server 'password' prompt
-        # and a local ssh 'passphrase' prompt (for unlocking a private key).
+        # keep this simple in here
+        cmd = executable + ' ' + options
+
+        # fire it up.
         spawn._spawn(self, cmd)
-        i = self.expect(["(?i)are you sure you want to continue connecting", original_prompt, "(?i)(?:password)|(?:passphrase for key)", "(?i)permission denied", "(?i)terminal type", TIMEOUT, "(?i)connection closed by remote host"], timeout=login_timeout)
 
-        # First phase
-        if i==0:
-            # New certificate -- always accept it.
-            # This is what you get if SSH does not have the remote host's
-            # public key stored in the 'known_hosts' cache.
-            self.sendline("yes")
-            i = self.expect(["(?i)are you sure you want to continue connecting", original_prompt, "(?i)(?:password)|(?:passphrase for key)", "(?i)permission denied", "(?i)terminal type", TIMEOUT])
-        if i==2: # password or passphrase
-            self.sendline(password)
-            i = self.expect(["(?i)are you sure you want to continue connecting", original_prompt, "(?i)(?:password)|(?:passphrase for key)", "(?i)permission denied", "(?i)terminal type", TIMEOUT])
-        if i==4:
-            self.sendline(terminal_type)
-            i = self.expect(["(?i)are you sure you want to continue connecting", original_prompt, "(?i)(?:password)|(?:passphrase for key)", "(?i)permission denied", "(?i)terminal type", TIMEOUT])
+        # run the login sequence...
+        self._login_state_machine(username, password)
 
-        # Second phase
-        if i==0:
-            # This is weird. This should not happen twice in a row.
+        # try to resolve the interface
+        if not self.sync_original_prompt(self.sync_multiplier):
             self.close()
-            raise ExceptionPxssh('Weird error. Got "are you sure" prompt twice.')
-        elif i==1: # can occur if you have a public key pair set to authenticate.
-            ### TODO: May NOT be OK if expect() got tricked and matched a false prompt.
-            pass
-        elif i==2: # password prompt again
-            # For incorrect passwords, some ssh servers will
-            # ask for the password again, others return 'denied' right away.
-            # If we get the password prompt again then this means
-            # we didn't get the password right the first time.
-            self.close()
-            raise ExceptionPxssh('password refused')
-        elif i==3: # permission denied -- password was bad.
-            self.close()
-            raise ExceptionPxssh('permission denied')
-        elif i==4: # terminal type again? WTF?
-            self.close()
-            raise ExceptionPxssh('Weird error. Got "terminal type" prompt twice.')
-        elif i==5: # Timeout
-            #This is tricky... I presume that we are at the command-line prompt.
-            #It may be that the shell prompt was so weird that we couldn't match
-            #it. Or it may be that we couldn't log in for some other reason. I
-            #can't be sure, but it's safe to guess that we did login because if
-            #I presume wrong and we are not logged in then this should be caught
-            #later when I try to set the shell prompt.
-            pass
-        elif i==6: # Connection closed by remote host
-            self.close()
-            raise ExceptionPxssh('connection closed')
-        else: # Unexpected
-            self.close()
-            raise ExceptionPxssh('unexpected login response')
-        if not self.sync_original_prompt(sync_multiplier):
-            self.close()
-            raise ExceptionPxssh('could not synchronize with original prompt')
+            raise ExceptionPxShell('could not synchronize with original prompt')
+
         # We appear to be in.
         # set shell prompt to something unique.
         if auto_prompt_reset:
             if not self.set_unique_prompt():
                 self.close()
-                raise ExceptionPxssh('could not set shell prompt '
-                                     '(recieved: %r, expected: %r).' % (
-                                         self.before, self.PROMPT,))
-        return True
+                raise ExceptionPxShell('could not set shell prompt '
+                                        '(recieved: %r, expected: %r).' % (
+                                            self.before,
+                                            self.interpreter.unique_prompt(),))
+
+        # update to the prompt
+        newinfo = self.prompt(timeout=0.1)
+
+
+    def _login_state_machine(self, username, password):
+        '''Sequence of steps to "login"'''
+        print("pxshell::_login_state_machine()")
+        # work on assumption of "basic" login steps
+        self.expect( [ "(?i)(?:login)", "(?i)(?:user\s*name)", TIMEOUT ], timeout=self.login_timeout )
+        self.sendline(username)
+        self.expect( [ "(?i)(?:password)", TIMEOUT ], timeout=self.login_timeout )
+        self.sendline(password)
+
 
     def logout (self):
         '''Sends exit to the remote shell.
@@ -360,7 +361,7 @@ class pxssh (pxshell):
 
         if timeout == -1:
             timeout = self.timeout
-        i = self.expect([self.PROMPT, TIMEOUT], timeout=timeout)
+        i = self.expect([self.interpreter.unique_prompt(), TIMEOUT], timeout=timeout)
         if i==1:
             return False
         return True
@@ -380,15 +381,42 @@ class pxssh (pxshell):
         :attr:`PROMPT` attribute to a regular expression. After that, the
         :meth:`prompt` method will try to match your prompt pattern.
         '''
+        print("pxshell::set_unique_prompt()")
+        # shells to try
+        if self.interpreter is None:
+            stt = [ pxsh(), pxcsh() ]
+        else:
+            stt = [ self.interpreter ]
 
-        self.sendline("unset PROMPT_COMMAND")
-        self.sendline(self.PROMPT_SET_SH) # sh-style
-        i = self.expect ([TIMEOUT, self.PROMPT], timeout=10)
-        if i == 0: # csh-style
-            self.sendline(self.PROMPT_SET_CSH)
-            i = self.expect([TIMEOUT, self.PROMPT], timeout=10)
-            if i == 0:
-                return False
-        return True
+        # try to (preemptively) mop up
+        #self.sendline("unset PROMPT_COMMAND")
 
+        # cook up a usable prompt
+        for sh in stt:
+            self.sendline(sh.set_prompt_cmd())
+            i = self.expect ([TIMEOUT, sh.unique_prompt()], timeout=10)
+            if i > 0:
+                self.interpreter = sh
+                return True
+
+        # hmm, that didn't go well
+        return False
+
+    def cmd(self, command, timeout=-1):
+        '''Provide a end-to-end command operation.'''
+
+        # issue the command
+        self.sendline(command)
+
+        # get a prompt back
+        ok = self.prompt(timeout=timeout)
+        if not ok:
+            raise ExceptionPxShell('could not synchronize with original prompt')
+
+        # tidy up the response
+        lines = self.before.splitlines()
+
+        # omit the "command" part
+        return lines[1:]
+        
 # vi:ts=4:sw=4:expandtab:ft=python:
