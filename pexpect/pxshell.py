@@ -240,7 +240,7 @@ class pxshell (spawn):
         not reset then this will disable the :meth:`prompt` method unless you
         manually set the :attr:`PROMPT` attribute.
         '''
-        print("pxshell::login()")
+        print("pxshell::login(%s,%s)" % (username, password))
         # archive the options
         self.login_timeout = login_timeout
         self.sync_multiplier = sync_multiplier        

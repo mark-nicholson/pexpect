@@ -24,40 +24,38 @@ UNIQUE_TAG = '[PEXPECT]'
 
 class pxcli(object):
 
-    def __init__(self):
-        self.tag = UNIQUE_TAG
-        self.prompt_fmt = '%s>'
+    def __init__(self,
+                 terminal_type='ansi',
+                 default_prompt=r"[#$]",
+                 unique_prompt="\[PEXPECT\][\$\#] ",
+                 set_prompt_cmd="PS1='[PEXPECT]\$ '"):
+        '''Basically defaults to /bin/sh.'''
+        
+        self._tag = UNIQUE_TAG
+        self._terminal_type = terminal_type
+        self._default_prompt = default_prompt
+        self._unique_prompt = unique_prompt
+        self._set_prompt_cmd = set_prompt_cmd
 
     def terminal_type(self):
-        raise NotImplementedError()
+        return self._terminal_type
 
     def default_prompt(self):
-        raise NotImplementedError()
+        return self._default_prompt
 
     def unique_prompt(self):
-        raise NotImplementedError()
+        return self._unique_prompt
 
     def set_prompt_cmd(self):
-        raise NotImplementedError()
+        return self._set_prompt_cmd
+
 
 class pxsh(pxcli):
     '''Support class for /bin/sh compatible shells'''
-
-    def terminal_type(self):
-        return 'ansi'
-
-    def default_prompt(self):
-        return r"[#$]"
-
-    def unique_prompt(self):
-        return "\[PEXPECT\][\$\#] "
-
-    def set_prompt_cmd(self):
-        return  "PS1='[PEXPECT]\$ '"
+    pass
 
 class pxcsh(pxsh):
     '''Support class for /bin/csh compatible shells'''
-
-    def set_prompt_cmd(self):
-        return "set prompt='[PEXPECT]\$ '"
-
+    def __init__(self):
+        pxsh.__init__(self,
+                      set_prompt_cmd = "set prompt='[PEXPECT]\$ '")
